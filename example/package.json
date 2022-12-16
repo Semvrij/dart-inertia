@@ -1,0 +1,19 @@
+{
+  "scripts": {
+    "dev": "rm -rf public/build && rm -rf ssr/* && vite",
+    "build": "vite build && vite build --ssr"
+  },
+  "devDependencies": {
+    "@inertiajs/inertia": "^0.11.0",
+    "@inertiajs/inertia-vue3": "^0.6.0",
+    "@inertiajs/progress": "^0.2.7",
+    "@inertiajs/server": "^0.1.0",
+    "@vitejs/plugin-vue": "^3.0.0",
+    "@vue/compiler-sfc": "^3.2.26",
+    "@vue/server-renderer": "^3.2.31",
+    "vite": "^3.0.0",
+    "vue": "^3.2.41",
+    "vue-loader": "^16.1.2",
+    "vue-template-compiler": "^2.6.14"
+  }
+}
