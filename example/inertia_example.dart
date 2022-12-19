@@ -9,13 +9,9 @@ void main() async {
       InternetAddress.anyIPv6, int.fromEnvironment('PORT', defaultValue: 3000));
 
   await for (HttpRequest request in server) {
-    final Map<String, dynamic> props = {
-      'prop': () => DateTime.now(),
-      'lazy': Inertia.lazy(() => DateTime.now())
-    };
-
     final String? component = routes[request.uri.path];
 
+    // Static files
     if (component == null) {
       final publicFile = File(path.join(Directory.current.path, 'example',
           'public', request.uri.path.substring(1)));
@@ -29,23 +25,24 @@ void main() async {
           '.js': ContentType('text', 'javascript', charset: 'utf-8'),
         };
 
-        request.response.headers.contentType =
-            contentTypes[path.extension(request.uri.path)];
-
-        request.response.write(data);
-
-        await request.response.close();
-
-        continue;
+        request.response
+          ..headers.contentType = contentTypes[path.extension(request.uri.path)]
+          ..write(data)
+          ..close();
       }
 
-      request.response.statusCode = 404;
-      request.response.write('404 - Not found');
-
-      await request.response.close();
+      request.response
+        ..statusCode = 404
+        ..write('404 - Not found')
+        ..close();
 
       continue;
     }
+
+    final Map<String, dynamic> props = {
+      'prop': () => DateTime.now(),
+      'lazy': Inertia.lazy(() => DateTime.now())
+    };
 
     Inertia(request).render(component, props);
   }

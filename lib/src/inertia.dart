@@ -7,99 +7,182 @@ import 'package:path/path.dart' as path;
 import 'lazy_prop.dart';
 
 class Inertia {
-  final HttpRequest request;
+  final HttpRequest _request;
 
-  String _rootView = 'index';
+  /// Sets the root template that's loaded on the first page visit.
+  String rootView = 'index';
 
-  final Map<String, dynamic> _sharedProps = {};
+  /// Shared data will be automatically merged with the page props.
+  final Map<String, dynamic> sharedData = {};
 
-  dynamic _version = 1;
+  /// To enable automatic asset refreshing, you simply need to tell Inertia what
+  /// the current version of your assets is. This can be any [String] `letters,
+  /// numbers, or a file hash`, as long as it changes when your assets have been
+  /// updated.
+  /// In the event that an asset changes, Inertia will automatically make a hard
+  /// page visit instead of a normal ajax visit on the next request.
+  String version = '1';
 
-  Inertia(this.request) {
-    request.response.headers.set('X-Powered-By', 'Dart with package:inertia');
+  /// Root directory, defaults to [Platform.script]
+  String directory = path.dirname(Platform.script.path);
 
-    if (request.response.statusCode == 302 &&
-        ['PUT', 'PATCH', 'DELETE'].contains(request.method)) {
-      request.response.statusCode = 303;
+  /// Create an Inertia Request
+  Inertia(this._request) {
+    _request.response
+      ..headers.set('X-Powered-By', 'Dart with package:inertia')
+      ..headers.set('Vary', 'X-Inertia');
+
+    if (_request.response.statusCode == HttpStatus.found &&
+        ['PUT', 'PATCH', 'DELETE'].contains(_request.method)) {
+      _request.response.statusCode = HttpStatus.seeOther;
     }
   }
 
-  void setRootView(String name) {
-    _rootView = name;
-  }
-
-  void share(key, value) {
+  /// Shared data will be automatically merged with the page props.
+  ///
+  /// ```dart
+  /// final inertia = Inertia(request);
+  ///
+  /// inertia.share('key', 'value');
+  /// // or
+  /// inertia.share({'key': 'value'});
+  /// ```
+  void share(key, [value]) {
     if (key is Map<String, dynamic>) {
-      return _sharedProps.addAll(key);
+      return sharedData.addAll(key);
     }
 
-    _sharedProps[key] = value;
+    sharedData[key.toString()] = value;
   }
 
-  dynamic getShared(String? key, dynamic defaultValue) {
-    if (key != null) {
-      return _sharedProps[key] ?? defaultValue;
-    }
-
-    return _sharedProps;
-  }
-
-  void flushShared() {
-    _sharedProps.clear();
-  }
-
-  void version(Object version) {
-    _version = version.toString();
-  }
-
-  String getVersion() {
-    return _version;
-  }
-
+  /// Never included on first visit.
+  /// Optionally included on partial reloads.
+  /// Only evaluated when needed.
+  ///
+  /// ```dart
+  /// Inertia.lazy(() async => await getArticles());
+  /// ```
   static LazyProp<dynamic> lazy(LazyPropCallback callback) =>
       LazyProp<dynamic>(callback);
 
-  Future<HttpResponse> render(String component,
+  /// Provide both the name of the JavaScript page [component], as well as any
+  /// [props] for the page.
+  /// ```dart
+  /// final inertia = Inertia(request);
+  ///
+  /// inertia.render('Index', {
+  ///   name 'test',
+  ///   count: 10
+  /// });
+  /// ```
+  void render(String component,
       [Map<String, dynamic> props = const <String, dynamic>{}]) async {
-    if (request.method == 'GET' &&
+    if (_request.method == 'GET' &&
         _isInertiaRequest &&
-        request.headers.value('x-inertia-version') != 1.toString()) {
-      return await location(request.uri);
+        _request.headers.value('x-inertia-version') != version) {
+      return location(_request.uri);
     }
 
-    _sharedProps.addAll(props);
+    props = {...sharedData, ...props};
 
     final String data = json.encode({
-      'version': _version,
       'component': component,
-      'props': await _buildProps(_sharedProps, component),
-      'url': request.uri.toString()
+      'props': await _buildProps(props, _isPartialRender(component)),
+      'url': _request.uri.toString(),
+      'version': version
     });
 
     if (_isInertiaRequest) {
-      request.response.headers.contentType = ContentType.json;
-      request.response.headers.set('X-inertia', 'true');
-      request.response.headers.set('Vary', 'Accept');
+      _request.response
+        ..headers.contentType = ContentType.json
+        ..headers.set('X-inertia', 'true')
+        ..write(data)
+        ..close();
 
-      request.response.write(data);
-
-      return await request.response.close();
+      return;
     }
 
-    final String fileName = '$_rootView.html';
-    final File file =
-        File(path.join(path.dirname(Platform.script.path), fileName));
+    final String fileName = '$rootView.html';
+    final File file = File(path.join(directory, fileName));
 
     if (!file.existsSync()) {
-      request.response.write('File [$fileName] not found');
-      request.response.statusCode;
+      _request.response
+        ..statusCode = HttpStatus.notFound
+        ..write('File [$fileName] not found')
+        ..close();
 
-      return await request.response.close();
+      return;
     }
 
+    final String html = await _parseHtml(file, data);
+
+    _request.response
+      ..headers.contentType = ContentType.html
+      ..write(html)
+      ..close();
+  }
+
+  /// Redirect to an external website, or even another non-Inertia endpoint in
+  /// your app, within an Inertia request. This is possible using a server-side
+  /// initiated window.location visit.
+  ///
+  /// ```dart
+  /// final inertia = Inertia(request);
+  ///
+  /// inertia.location('https://example.com');
+  /// ```
+  void location(Uri uri) async {
+    _request.response
+      ..headers.set('X-Inertia-Location', uri.toString())
+      ..statusCode = HttpStatus.conflict
+      ..close();
+  }
+
+  bool get _isInertiaRequest => _request.headers.value('x-inertia') == 'true';
+
+  List<String> get _partialKeys =>
+      _request.headers.value('x-inertia-partial-data')?.split(',') ??
+      <String>[];
+
+  bool _isPartialRender(String component) =>
+      _partialKeys.isNotEmpty &&
+      _request.headers.value('x-inertia-partial-component') == component;
+
+  Object? _sanitizeValue(object) {
+    if (object is String ||
+        object is num ||
+        object is List ||
+        object is Map ||
+        object is bool ||
+        object == null) {
+      return object;
+    }
+
+    if (object is Function || object is LazyProp) {
+      return _sanitizeValue(object());
+    }
+
+    return object.toString();
+  }
+
+  Future<Map<String, dynamic>> _buildProps(
+      Map<String, dynamic> props, bool isPartialRender) async {
+    final Iterable<String> keys =
+        _partialKeys.isEmpty ? props.keys : _partialKeys;
+
+    return <String, dynamic>{
+      for (String key in keys)
+        if (isPartialRender && props[key] is LazyProp)
+          key: _sanitizeValue(props[key])
+        else if (props[key] is! LazyProp)
+          key: _sanitizeValue(props[key])
+    };
+  }
+
+  Future<String> _parseHtml(File file, String data) async {
     final Map<String, dynamic>? ssr = await _renderSsr(data);
 
-    final String html = file
+    return file
         .readAsStringSync()
         .replaceAllMapped(RegExp("@inertiaHead(?:\\((?:'|\")(.*)(?:'|\")\\))?"),
             (Match match) => ssr?['head'] ?? '')
@@ -113,8 +196,8 @@ class Inertia {
         return '<script type="module" src="http://localhost:5173/@vite/client"></script><script type="module" src="http://localhost:5173/resources/js/app.js"></script>';
       }
 
-      final File manifest = File(path.join(path.dirname(Platform.script.path),
-          'public', 'build', 'manifest.json'));
+      final File manifest =
+          File(path.join(directory, 'public', 'build', 'manifest.json'));
 
       if (!manifest.existsSync()) {
         return '';
@@ -136,58 +219,6 @@ class Inertia {
 
       return buffer.toString();
     });
-
-    request.response.headers.contentType = ContentType.html;
-    request.response.write(html);
-
-    return await request.response.close();
-  }
-
-  location(Uri uri) async {
-    request.response.headers.set('X-Inertia-Location', uri.toString());
-    request.response.statusCode = 409;
-
-    return await request.response.close();
-  }
-
-  bool get _isInertiaRequest => request.headers.value('x-inertia') == 'true';
-
-  List<String> get _partialKeys =>
-      request.headers.value('x-inertia-partial-data')?.split(',') ?? <String>[];
-
-  bool _isPartialRender(String component) =>
-      _partialKeys.isNotEmpty &&
-      request.headers.value('x-inertia-partial-component') == component;
-
-  Object _sanitizeValue(object) {
-    if (object is String ||
-        object is num ||
-        object is List ||
-        object is Map ||
-        object is bool ||
-        object == null) {
-      return object;
-    }
-
-    if (object is Function || object is LazyProp) {
-      return _sanitizeValue(object());
-    }
-
-    return object.toString();
-  }
-
-  Future<Map<String, dynamic>> _buildProps(
-      Map<String, dynamic> props, String component) async {
-    final Iterable<String> keys =
-        _partialKeys.isEmpty ? props.keys : _partialKeys;
-
-    return <String, dynamic>{
-      for (String key in keys)
-        if (_isPartialRender(component) && props[key] is LazyProp)
-          key: _sanitizeValue(props[key])
-        else if (props[key] is! LazyProp)
-          key: _sanitizeValue(props[key])
-    };
   }
 
   Future<Map<String, dynamic>?> _renderSsr(String data) async {

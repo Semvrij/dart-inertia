@@ -4,22 +4,22 @@ The Inertia.js server-side adapter for Dart. Visit [inertiajs.com](https://inert
 
 ## Features
 
-- [x] Inertia responses
-- [x] External redirects
-- [x] Shared data
-- [x] Partial reloads
-- [x] Lazy props
-- [x] Server Side Rendering
-- [ ] Documentation
-- [ ] Tests
+- Inertia responses
+- External redirects
+- Shared data
+- Partial reloads
+- Lazy props
+- Server Side Rendering
+- Documentation
+- Tests
 
 ## Getting started
 
-First, add inertia into your pubspec.yaml.
+Add inertia to your pubspec.yaml.
 
 ```yaml
 dependencies:
-  inertia: ^0.1.0
+  inertia: ^0.2.0
 ```
 
 For a full example, check out the `/example` folder.
